@@ -130,32 +130,45 @@ def analyze_csv(file_path, delimiter=','):
             sniffer = csv.Sniffer()
             try:
                 dialect = sniffer.sniff(sample)
-                reader = csv.reader(csv_file, dialect)
+                has_header = sniffer.has_header(sample)
+                reader = csv.DictReader(csv_file, dialect=dialect) if has_header else csv.reader(csv_file, dialect)
             except csv.Error:
                 # Fall back to the provided delimiter if sniffing fails
                 reader = csv.reader(csv_file, delimiter=delimiter)
             
-            for row in reader:
-                for field in row:
-                    # Clean the field
-                    email = field.strip().strip('"\'')
-                    
-                    if is_valid_email(email):
-                        domain = email.split('@')[1].lower()
-                        provider = get_provider_from_domain(domain)
+            # Handle the expected columns format
+            if has_header:
+                # Check if we're working with the specified columns format
+                if 'Email' in reader.fieldnames:
+                    for row in reader:
+                        email = row.get('Email', '').strip()
                         
-                        # Increment provider count
-                        provider_counter[provider] += 1
-                        
-                        # Store email by provider
-                        if provider not in emails_by_provider:
-                            emails_by_provider[provider] = []
-                        emails_by_provider[provider].append(email)
-                        
-                        valid_emails += 1
-                    elif '@' in email:
-                        # Probably a malformed email
-                        invalid_emails += 1
+                        if is_valid_email(email):
+                            domain = email.split('@')[1].lower()
+                            provider = get_provider_from_domain(domain)
+                            
+                            # Increment provider count
+                            provider_counter[provider] += 1
+                            
+                            # Store email by provider
+                            if provider not in emails_by_provider:
+                                emails_by_provider[provider] = []
+                            emails_by_provider[provider].append(email)
+                            
+                            valid_emails += 1
+                        elif '@' in email:
+                            # Probably a malformed email
+                            invalid_emails += 1
+                else:
+                    # Generic CSV handling
+                    for row in reader:
+                        for field in row.values():
+                            process_field(field, provider_counter, emails_by_provider, valid_emails, invalid_emails)
+            else:
+                # No header, process each field in each row
+                for row in reader:
+                    for field in row:
+                        process_field(field, provider_counter, emails_by_provider, valid_emails, invalid_emails)
     
     except FileNotFoundError:
         print(f"Error: File '{file_path}' not found.")
@@ -168,6 +181,38 @@ def analyze_csv(file_path, delimiter=','):
         sys.exit(1)
         
     return provider_counter, valid_emails, invalid_emails, emails_by_provider
+
+def process_field(field, provider_counter, emails_by_provider, valid_emails, invalid_emails):
+    """Process a single field to check if it's an email address."""
+    # Clean the field
+    email = str(field).strip().strip('"\'')
+    
+    if is_valid_email(email):
+        domain = email.split('@')[1].lower()
+        provider = get_provider_from_domain(domain)
+        
+        # Increment provider count
+        provider_counter[provider] += 1
+        
+        # Store email by provider
+        if provider not in emails_by_provider:
+            emails_by_provider[provider] = []
+        emails_by_provider[provider].append(email)
+        
+        valid_emails += 1
+        return True
+    elif '@' in email:
+        # Probably a malformed email
+        invalid_emails += 1
+    
+    return False
+
+def get_default_output_path(input_file):
+    """Generate a default output file path based on the input file."""
+    directory = os.path.dirname(os.path.abspath(input_file))
+    filename = os.path.basename(input_file)
+    name_without_ext = os.path.splitext(filename)[0]
+    return os.path.join(directory, f"{name_without_ext}_analysis.csv")
 
 def print_results(provider_counter, valid_emails, invalid_emails, emails_by_provider, verbose=False):
     """Print analysis results to console."""
@@ -250,7 +295,7 @@ def main():
     parser.add_argument('file', help='Path to the CSV file containing email addresses')
     parser.add_argument('-d', '--delimiter', default=',', help='CSV delimiter character (default: ,)')
     parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output (list all emails)')
-    parser.add_argument('-o', '--output', help='Export results to a CSV file')
+    parser.add_argument('-o', '--output', help='Export results to a CSV file (defaults to input_file_analysis.csv)')
     
     args = parser.parse_args()
     
@@ -270,9 +315,13 @@ def main():
     # Print the results
     print_results(provider_counter, valid_emails, invalid_emails, emails_by_provider, verbose=args.verbose)
     
-    # Export the results if requested
-    if args.output:
-        export_results(provider_counter, valid_emails, invalid_emails, emails_by_provider, args.output)
+    # Determine output path if not provided
+    output_file = args.output if args.output else get_default_output_path(args.file)
+    
+    # Export the results
+    export_results(provider_counter, valid_emails, invalid_emails, emails_by_provider, output_file)
+    print(f"\nResults automatically saved to: {output_file}")
 
 if __name__ == '__main__':
     main()
+
