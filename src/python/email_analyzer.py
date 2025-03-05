@@ -12,6 +12,7 @@ import sys
 import argparse
 from collections import Counter
 import os.path
+import traceback
 
 # Try to import dns.resolver for MX lookups
 try:
@@ -118,7 +119,8 @@ def get_provider_from_mx_records(domain):
             if provider:
                 break
                 
-    except Exception:
+    except Exception as e:
+        print(f"DNS lookup error for {domain}: {e}")
         # Any DNS errors, just return None
         pass
         
@@ -179,75 +181,130 @@ def analyze_csv(file_path, delimiter=',', use_dns=True):
     original_rows = []
     headers = None
     
+    # Debug information
+    print(f"\nAnalyzing file: {file_path}")
+    print(f"File exists: {os.path.exists(file_path)}")
+    
+    if not os.path.exists(file_path):
+        print(f"ERROR: File '{file_path}' not found. Please check the path and try again.")
+        sys.exit(1)
+    
     try:
         with open(file_path, 'r', newline='', encoding='utf-8') as csv_file:
             # Try to detect the dialect
+            print("Reading file and detecting CSV format...")
             sample = csv_file.read(1024)
             csv_file.seek(0)
             
-            sniffer = csv.Sniffer()
+            if len(sample.strip()) == 0:
+                print("WARNING: The file appears to be empty.")
+            
             try:
-                dialect = sniffer.sniff(sample)
-                has_header = sniffer.has_header(sample)
+                # Debug: Show the first part of the file content
+                print(f"File sample content (first 100 chars): {repr(sample[:100])}")
                 
-                if has_header:
-                    reader = csv.reader(csv_file, dialect=dialect)
-                    headers = next(reader)
-                    # Store original headers
-                    email_col_index = -1
+                sniffer = csv.Sniffer()
+                try:
+                    dialect = sniffer.sniff(sample)
+                    has_header = sniffer.has_header(sample)
                     
-                    # Try to find the email column
-                    for i, header in enumerate(headers):
-                        if header.lower() == 'email':
-                            email_col_index = i
-                            break
+                    print(f"Detected CSV dialect: delimiter='{dialect.delimiter}', has_header={has_header}")
                     
-                    # Process rows
-                    for row in reader:
-                        original_rows.append(row)
+                    if has_header:
+                        reader = csv.reader(csv_file, dialect=dialect)
+                        headers = next(reader)
+                        print(f"Headers detected: {headers}")
                         
-                        if email_col_index >= 0 and email_col_index < len(row):
-                            email = row[email_col_index].strip()
-                            process_email(email, provider_counter, emails_by_provider, valid_emails, invalid_emails, use_dns)
-                else:
-                    reader = csv.reader(csv_file, dialect=dialect)
-                    for row in reader:
-                        original_rows.append(row)
-                        # Try to find email in any column
-                        for field in row:
-                            process_field(field, provider_counter, emails_by_provider, valid_emails, invalid_emails, use_dns)
-            except csv.Error:
-                # Fall back to the provided delimiter if sniffing fails
-                csv_file.seek(0)
-                reader = csv.reader(csv_file, delimiter=delimiter)
-                
-                # Check first row to see if it looks like a header
-                first_row = next(reader, None)
-                if first_row:
-                    # Check if any field in the first row contains 'email' (case insensitive)
-                    if any('email' in field.lower() for field in first_row):
-                        headers = first_row
-                        # Find email column index
+                        # Store original headers
                         email_col_index = -1
+                        
+                        # Try to find the email column
                         for i, header in enumerate(headers):
-                            if 'email' in header.lower():
+                            if header.lower() == 'email':
                                 email_col_index = i
                                 break
+                        
+                        print(f"Email column index: {email_col_index}")
+                        
+                        # Process rows
+                        row_count = 0
+                        for row in reader:
+                            row_count += 1
+                            original_rows.append(row)
+                            
+                            if email_col_index >= 0 and email_col_index < len(row):
+                                email = row[email_col_index].strip()
+                                if process_email(email, provider_counter, emails_by_provider, valid_emails, invalid_emails, use_dns):
+                                    valid_emails += 1
+                                elif '@' in email:
+                                    invalid_emails += 1
+                        
+                        print(f"Processed {row_count} rows")
                     else:
-                        # Treat first row as data
-                        original_rows.append(first_row)
-                        for field in first_row:
-                            process_field(field, provider_counter, emails_by_provider, valid_emails, invalid_emails, use_dns)
-                
-                # Process remaining rows
-                for row in reader:
-                    original_rows.append(row)
-                    if headers and email_col_index >= 0 and email_col_index < len(row):
-                        email = row[email_col_index].strip()
-                        process_email(email, provider_counter, emails_by_provider, valid_emails, invalid_emails, use_dns)
-                    else:
-                        for field in row:
-                            process_field(field, provider_counter, emails_by_provider, valid_emails, invalid_emails, use_dns)
+                        print("No headers detected. Scanning all fields for emails.")
+                        reader = csv.reader(csv_file, dialect=dialect)
+                        row_count = 0
+                        for row in reader:
+                            row_count += 1
+                            original_rows.append(row)
+                            # Try to find email in any column
+                            for field in row:
+                                if process_field(field, provider_counter, emails_by_provider, valid_emails, invalid_emails, use_dns):
+                                    valid_emails += 1
+                        
+                        print(f"Processed {row_count} rows")
+                except csv.Error as e:
+                    print(f"CSV sniffing error: {e}")
+                    # Fall back to the provided delimiter if sniffing fails
+                    csv_file.seek(0)
+                    print(f"Falling back to default delimiter: '{delimiter}'")
+                    reader = csv.reader(csv_file, delimiter=delimiter)
+                    
+                    # Check first row to see if it looks like a header
+                    first_row = next(reader, None)
+                    if first_row:
+                        print(f"First row: {first_row}")
+                        # Check if any field in the first row contains 'email' (case insensitive)
+                        if any('email' in field.lower() for field in first_row):
+                            headers = first_row
+                            print(f"Headers based on first row: {headers}")
+                            # Find email column index
+                            email_col_index = -1
+                            for i, header in enumerate(headers):
+                                if 'email' in header.lower():
+                                    email_col_index = i
+                                    break
+                            
+                            print(f"Email column index: {email_col_index}")
+                        else:
+                            # Treat first row as data
+                            print("First row doesn't look like headers. Processing as data.")
+                            original_rows.append(first_row)
+                            for field in first_row:
+                                if process_field(field, provider_counter, emails_by_provider, valid_emails, invalid_emails, use_dns):
+                                    valid_emails += 1
+                    
+                    # Process remaining rows
+                    row_count = 0
+                    for row in reader:
+                        row_count += 1
+                        original_rows.append(row)
+                        if headers and email_col_index >= 0 and email_col_index < len(row):
+                            email = row[email_col_index].strip()
+                            if process_email(email, provider_counter, emails_by_provider, valid_emails, invalid_emails, use_dns):
+                                valid_emails += 1
+                            elif '@' in email:
+                                invalid_emails += 1
+                        else:
+                            for field in row:
+                                if process_field(field, provider_counter, emails_by_provider, valid_emails, invalid_emails, use_dns):
+                                    valid_emails += 1
+                    
+                    print(f"Processed {row_count} rows")
+            except Exception as e:
+                print(f"Error processing CSV: {e}")
+                traceback.print_exc()
+                sys.exit(1)
     
     except FileNotFoundError:
         print(f"Error: File '{file_path}' not found.")
@@ -257,6 +314,7 @@ def analyze_csv(file_path, delimiter=',', use_dns=True):
         sys.exit(1)
     except Exception as e:
         print(f"Error processing file: {e}")
+        traceback.print_exc()
         sys.exit(1)
         
     return provider_counter, valid_emails, invalid_emails, emails_by_provider, original_rows, headers
@@ -281,11 +339,10 @@ def process_email(email, provider_counter, emails_by_provider, valid_emails, inv
             emails_by_provider[provider] = []
         emails_by_provider[provider].append(email)
         
-        valid_emails += 1
         return True
     elif '@' in email:
         # Probably a malformed email
-        invalid_emails += 1
+        return False
     
     return False
 
@@ -323,8 +380,8 @@ def print_results(provider_counter, valid_emails, invalid_emails, emails_by_prov
         sorted_providers = provider_counter.most_common()
         
         # Calculate column widths for neat formatting
-        provider_width = max(len("Provider"), max(len(p) for p, _ in sorted_providers))
-        count_width = max(len("Count"), len(str(max(c for _, c in sorted_providers))))
+        provider_width = max(len("Provider"), max(len(p) for p, _ in sorted_providers) if sorted_providers else 0)
+        count_width = max(len("Count"), len(str(max(c for _, c in sorted_providers) if sorted_providers else 0)))
         
         # Print header with formatting
         print(f"{'Provider':<{provider_width}} | {'Count':>{count_width}} | Percentage")
@@ -346,14 +403,20 @@ def print_results(provider_counter, valid_emails, invalid_emails, emails_by_prov
                 print(f"\n{provider} ({len(emails)}):")
                 for email in emails:
                     print(f"  {email}")
+    else:
+        print("\nNo valid emails found in the file.")
 
 def export_results(provider_counter, valid_emails, invalid_emails, emails_by_provider, original_rows, headers, output_file):
     """Export analysis results to a CSV file, preserving the original format."""
     total_emails = valid_emails + invalid_emails
     
     try:
+        print(f"\nExporting results to {output_file}")
+        
         # Create a separate summary file
         summary_file = output_file.replace('.csv', '_summary.csv')
+        print(f"Creating summary file: {summary_file}")
+        
         with open(summary_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             
@@ -384,6 +447,8 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
                 writer.writerow([provider, count, f"{percentage:.2f}%"])
         
         # Now create the main output file with the original format
+        print(f"Creating main output file: {output_file}")
+        
         with open(output_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             
@@ -392,6 +457,7 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
             email_col_index = -1
             
             if headers:
+                print(f"Using headers: {headers}")
                 # Check if we need to add Email Provider column
                 for i, header in enumerate(headers):
                     header_lower = header.lower()
@@ -439,6 +505,7 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
                     
                     writer.writerow(output_row)
             else:
+                print("No headers detected. Adding provider as a new column.")
                 # If no headers, just write the original rows as is, with provider info as an additional column
                 for row in original_rows:
                     output_row = list(row)  # Make a copy
@@ -474,20 +541,55 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
     
     except Exception as e:
         print(f"Error exporting results: {e}")
+        traceback.print_exc()
+
+def create_sample_csv(output_file):
+    """Create a sample CSV file with email addresses for testing."""
+    print(f"Creating sample CSV file: {output_file}")
+    with open(output_file, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Name', 'Email', 'Company'])
+        writer.writerow(['John Doe', 'john.doe@gmail.com', 'Example Inc.'])
+        writer.writerow(['Jane Smith', 'jane.smith@outlook.com', 'Sample Corp.'])
+        writer.writerow(['Bob Johnson', 'bob@protonmail.com', 'Test LLC'])
+        writer.writerow(['Alice Brown', 'alice@yahoo.com', 'Demo Co.'])
+        writer.writerow(['Charlie Green', 'charlie@customdomain.com', 'Custom Inc.'])
+    print(f"Sample CSV created at {output_file}")
+    print("You can now run: python email_analyzer.py sample_emails.csv -v")
 
 def main():
     """Main function to parse arguments and run the analysis."""
+    print("\nEmail Provider Analyzer")
+    print("======================")
+    
     parser = argparse.ArgumentParser(description='Analyze email addresses from a CSV file and categorize them by provider.')
     
-    parser.add_argument('input_file', help='Path to the CSV file containing email addresses')
+    parser.add_argument('input_file', help='Path to the CSV file containing email addresses', nargs='?')
     parser.add_argument('-o', '--output-file', help='Path to save the analysis results (default: inputfile_analysis.csv)')
     parser.add_argument('-d', '--delimiter', default=',', help='CSV delimiter character (default: ,)')
     parser.add_argument('-v', '--verbose', action='store_true', help='Print full email lists by provider')
     parser.add_argument('--no-dns', action='store_true', help='Disable DNS MX record lookups')
+    parser.add_argument('--create-sample', action='store_true', help='Create a sample CSV file for testing')
     
     args = parser.parse_args()
     
-    if not DNS_AVAILABLE and not args.no_dns:
+    # Check if creating a sample file was requested
+    if args.create_sample:
+        create_sample_csv('sample_emails.csv')
+        return
+    
+    # Check if input file was provided
+    if not args.input_file:
+        parser.print_help()
+        print("\nError: You must provide an input file.")
+        print("Example usage: python email_analyzer.py emails.csv -v")
+        print("To create a sample CSV: python email_analyzer.py --create-sample")
+        return
+    
+    # Display DNS availability information
+    if DNS_AVAILABLE:
+        print("DNS lookup capability: Available (dnspython is installed)")
+    else:
         print("Warning: dnspython is not installed. DNS MX record lookups will be disabled.")
         print("To enable DNS lookups, install dnspython with: pip install dnspython")
         print("This feature enhances provider detection for custom domains.")
@@ -510,4 +612,9 @@ def main():
     export_results(provider_counter, valid_emails, invalid_emails, emails_by_provider, original_rows, headers, output_file)
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"Unhandled exception: {e}")
+        traceback.print_exc()
+        sys.exit(1)
