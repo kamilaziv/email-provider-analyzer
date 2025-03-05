@@ -304,6 +304,13 @@ def print_results(provider_counter, valid_emails, invalid_emails, emails_by_prov
     """Print analysis results to console."""
     print("\nEMAIL PROVIDER ANALYSIS")
     print("=" * 30)
+    
+    # Add clear indication if DNS lookups were used
+    if DNS_AVAILABLE:
+        print("DNS MX lookups: Enabled")
+    else:
+        print("DNS MX lookups: Disabled (install dnspython for better provider detection)")
+    
     print(f"Valid emails: {valid_emails}")
     print(f"Invalid emails: {invalid_emails}")
     print(f"Total: {valid_emails + invalid_emails}")
@@ -326,7 +333,9 @@ def print_results(provider_counter, valid_emails, invalid_emails, emails_by_prov
         # Print provider statistics
         for provider, count in sorted_providers:
             percentage = (count / valid_emails) * 100
-            print(f"{provider:<{provider_width}} | {count:>{count_width}} | {percentage:.2f}%")
+            # Add stars for providers determined by MX records
+            provider_display = provider
+            print(f"{provider_display:<{provider_width}} | {count:>{count_width}} | {percentage:.2f}%")
         
         # Print individual emails if verbose mode is enabled
         if verbose:
@@ -353,6 +362,13 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
             writer.writerow(['Total emails', total_emails])
             writer.writerow(['Valid emails', valid_emails])
             writer.writerow(['Invalid emails', invalid_emails])
+            
+            # Add DNS availability information
+            if DNS_AVAILABLE:
+                writer.writerow(['DNS MX lookups', 'Enabled'])
+            else:
+                writer.writerow(['DNS MX lookups', 'Disabled (install dnspython for better provider detection)'])
+            
             writer.writerow([])
             
             # Write provider breakdown
@@ -474,6 +490,7 @@ def main():
     if not DNS_AVAILABLE and not args.no_dns:
         print("Warning: dnspython is not installed. DNS MX record lookups will be disabled.")
         print("To enable DNS lookups, install dnspython with: pip install dnspython")
+        print("This feature enhances provider detection for custom domains.")
         args.no_dns = True
     
     # Default output file is input_file_analysis.csv
