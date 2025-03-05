@@ -11,7 +11,8 @@ const initialResults = {
   totalEmails: 0,
   validEmails: 0,
   invalidEmails: 0,
-  raw: {}
+  raw: {},
+  errors: []
 };
 
 const Index = () => {
@@ -31,9 +32,21 @@ const Index = () => {
         setHasResults(true);
         setIsProcessing(false);
         
-        toast.success('Analysis complete', {
-          description: `Analyzed ${analysisResults.totalEmails} emails from ${file.name}`
-        });
+        if (analysisResults.errors && analysisResults.errors.length > 0) {
+          // Show warning toast if there were errors but we still got some results
+          toast.warning('Analysis completed with warnings', {
+            description: analysisResults.errors[0],
+            duration: 5000
+          });
+        } else if (analysisResults.validEmails > 0) {
+          toast.success('Analysis complete', {
+            description: `Analyzed ${analysisResults.totalEmails} emails from ${file.name}`
+          });
+        } else {
+          toast.error('No valid emails found', {
+            description: 'Please check if the file contains proper email addresses.'
+          });
+        }
       }, 800);
       
     } catch (error) {
@@ -41,7 +54,7 @@ const Index = () => {
       setIsProcessing(false);
       
       toast.error('Analysis failed', {
-        description: 'Could not process the file. Please check the format and try again.'
+        description: error instanceof Error ? error.message : 'Could not process the file. Please check the format and try again.'
       });
     }
   };

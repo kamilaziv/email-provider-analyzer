@@ -9,6 +9,7 @@ interface AnalysisResult {
   validEmails: number;
   invalidEmails: number;
   raw: Record<string, string[]>;
+  errors?: string[];
 }
 
 // Email provider colors
@@ -91,67 +92,187 @@ const DOMAIN_PROVIDER_MAP: Record<string, string> = {
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
 export const analyzeEmailsFromCSV = async (file: File): Promise<AnalysisResult> => {
+  console.log(`Starting analysis of file: ${file.name} (${file.size} bytes)`);
+  
   return new Promise((resolve, reject) => {
+    // Validate file type and size first
+    if (!file.name.toLowerCase().endsWith('.csv') && file.type !== 'text/csv') {
+      console.error(`Invalid file type: ${file.type}. Expected CSV.`);
+      reject(new Error('Invalid file format. Please upload a CSV file.'));
+      return;
+    }
+    
+    if (file.size > 10 * 1024 * 1024) { // 10MB limit
+      console.error(`File too large: ${file.size} bytes.`);
+      reject(new Error('File size exceeds 10MB limit. Please upload a smaller file.'));
+      return;
+    }
+    
     const reader = new FileReader();
     
     reader.onload = (event) => {
       try {
+        console.log('File read successful, starting processing...');
         const result = event.target?.result as string;
-        const analysis = processCSVContent(result);
+        
+        // Quick check for empty file
+        if (!result || result.trim() === '') {
+          reject(new Error('The uploaded CSV file is empty. Please check the file and try again.'));
+          return;
+        }
+        
+        const analysis = processCSVContent(result, file.name);
+        console.log(`Analysis complete: Found ${analysis.validEmails} valid emails across ${analysis.providers.length} providers`);
         resolve(analysis);
       } catch (error) {
-        reject(error);
+        console.error('Error during CSV processing:', error);
+        reject(error instanceof Error 
+          ? error 
+          : new Error('An unexpected error occurred while processing the file.'));
       }
     };
     
-    reader.onerror = () => {
-      reject(new Error('Error reading file'));
+    reader.onerror = (event) => {
+      console.error('FileReader error:', event);
+      reject(new Error('Failed to read the file. Please try again or use a different file.'));
     };
     
     reader.readAsText(file);
   });
 };
 
-const processCSVContent = (content: string): AnalysisResult => {
-  // Parse CSV content
-  const lines = content.split(/\r?\n/).filter(line => line.trim() !== '');
+const processCSVContent = (content: string, fileName: string): AnalysisResult => {
+  console.log('Processing CSV content...');
   
   // Initialize variables
   const providerCount: Record<string, number> = {};
   const rawData: Record<string, string[]> = {};
   let validEmails = 0;
   let invalidEmails = 0;
+  const errorMessages: string[] = [];
   
-  // Process each line to find emails
-  lines.forEach(line => {
-    // Split by common delimiters (comma, semicolon, tab)
-    const parts = line.split(/[,;\t]/);
+  try {
+    // Check for BOM character and remove if present
+    const contentWithoutBOM = content.replace(/^\uFEFF/, '');
     
-    parts.forEach(part => {
-      // Clean the part
-      const cleanPart = part.trim().replace(/^["']|["']$/g, '');
+    // Parse CSV content - handle different line endings
+    const lines = contentWithoutBOM.split(/\r?\n/).filter(line => line.trim() !== '');
+    console.log(`Found ${lines.length} non-empty lines in CSV`);
+    
+    if (lines.length === 0) {
+      throw new Error('No data found in the CSV file.');
+    }
+    
+    // Detect delimiter by analyzing first few lines
+    const possibleDelimiters = [',', ';', '\t', '|'];
+    const delimiterCount = possibleDelimiters.map(delimiter => ({
+      delimiter,
+      count: lines.slice(0, Math.min(5, lines.length)).reduce(
+        (sum, line) => sum + (line.split(delimiter).length - 1), 0
+      )
+    }));
+    
+    // Select the delimiter with highest occurrence
+    const primaryDelimiter = delimiterCount.sort((a, b) => b.count - a.count)[0].delimiter;
+    console.log(`Detected primary delimiter: "${primaryDelimiter}"`);
+    
+    // Try multiple approaches to find emails
+    const foundEmails = new Set<string>();
+    let foundAnyEmails = false;
+    
+    // Process each line to find emails
+    lines.forEach((line, index) => {
+      // Skip empty lines
+      if (!line.trim()) return;
       
-      // Check if it looks like an email
-      if (EMAIL_REGEX.test(cleanPart)) {
-        const domain = cleanPart.split('@')[1].toLowerCase();
-        const provider = getProviderFromDomain(domain);
+      try {
+        // Split by detected delimiter
+        const parts = line.split(primaryDelimiter);
         
-        // Increment provider count
-        providerCount[provider] = (providerCount[provider] || 0) + 1;
+        // Search for emails in parts
+        let foundEmailInLine = false;
+        parts.forEach(part => {
+          // Clean the part - remove quotes and extra spaces
+          const cleanPart = part.trim().replace(/^["']|["']$/g, '');
+          
+          if (EMAIL_REGEX.test(cleanPart)) {
+            foundEmailInLine = true;
+            foundAnyEmails = true;
+            
+            // Don't count duplicates
+            if (foundEmails.has(cleanPart)) return;
+            foundEmails.add(cleanPart);
+            
+            const domain = cleanPart.split('@')[1].toLowerCase();
+            const provider = getProviderFromDomain(domain);
+            
+            // Increment provider count
+            providerCount[provider] = (providerCount[provider] || 0) + 1;
+            
+            // Store raw data
+            if (!rawData[provider]) {
+              rawData[provider] = [];
+            }
+            rawData[provider].push(cleanPart);
+            
+            validEmails++;
+          } else if (cleanPart.includes('@')) {
+            // Potentially malformed email
+            invalidEmails++;
+            
+            // Log the first few invalid emails for debugging
+            if (invalidEmails <= 5) {
+              console.log(`Invalid email format at line ${index + 1}: "${cleanPart}"`);
+            }
+          }
+        });
         
-        // Store raw data
-        if (!rawData[provider]) {
-          rawData[provider] = [];
+        // If no email found in line, try direct regex search
+        if (!foundEmailInLine) {
+          const emailMatches = line.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
+          if (emailMatches) {
+            emailMatches.forEach(email => {
+              if (EMAIL_REGEX.test(email) && !foundEmails.has(email)) {
+                foundEmails.add(email);
+                foundAnyEmails = true;
+                
+                const domain = email.split('@')[1].toLowerCase();
+                const provider = getProviderFromDomain(domain);
+                
+                providerCount[provider] = (providerCount[provider] || 0) + 1;
+                
+                if (!rawData[provider]) {
+                  rawData[provider] = [];
+                }
+                rawData[provider].push(email);
+                
+                validEmails++;
+              }
+            });
+          }
         }
-        rawData[provider].push(cleanPart);
-        
-        validEmails++;
-      } else if (cleanPart.includes('@')) {
-        // Potentially malformed email
-        invalidEmails++;
+      } catch (lineError) {
+        console.error(`Error processing line ${index + 1}:`, lineError);
+        errorMessages.push(`Error in line ${index + 1}: ${lineError instanceof Error ? lineError.message : 'Unknown error'}`);
       }
     });
-  });
+    
+    if (!foundAnyEmails) {
+      console.warn('No valid emails found in the file');
+      
+      // Sample the first few lines for debugging
+      const sampleLines = lines.slice(0, 3).map(line => `"${line}"`).join(', ');
+      console.log(`Sample of first few lines: ${sampleLines}`);
+      
+      errorMessages.push('No valid email addresses found in the file. Please check the file format and try again.');
+    }
+    
+  } catch (error) {
+    console.error('CSV parsing error:', error);
+    errorMessages.push(`Error parsing CSV: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    
+    // Still return whatever we were able to parse
+  }
   
   // Create provider data for chart
   const providers = Object.entries(providerCount)
@@ -162,13 +283,20 @@ const processCSVContent = (content: string): AnalysisResult => {
     }))
     .sort((a, b) => b.value - a.value);
   
-  return {
+  const result: AnalysisResult = {
     providers,
     totalEmails: validEmails + invalidEmails,
     validEmails,
     invalidEmails,
     raw: rawData
   };
+  
+  // Only add errors if there are any
+  if (errorMessages.length > 0) {
+    result.errors = errorMessages;
+  }
+  
+  return result;
 };
 
 const getProviderFromDomain = (domain: string): string => {
