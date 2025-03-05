@@ -5,10 +5,6 @@ import AnalysisResults from '@/components/AnalysisResults';
 import { analyzeEmailsFromCSV } from '@/services/emailAnalyzer';
 import { Toaster } from '@/components/ui/sonner';
 import { toast } from 'sonner';
-import { motion } from 'framer-motion';
-
-// Add framer-motion dependency
-<lov-add-dependency>framer-motion@^11.0.0</lov-add-dependency>
 
 const initialResults = {
   providers: [],
@@ -16,28 +12,6 @@ const initialResults = {
   validEmails: 0,
   invalidEmails: 0,
   raw: {}
-};
-
-const fadeInUp = {
-  hidden: { opacity: 0, y: 20 },
-  visible: { 
-    opacity: 1, 
-    y: 0,
-    transition: { 
-      duration: 0.6,
-      ease: [0.22, 1, 0.36, 1]
-    }
-  }
-};
-
-const staggerContainer = {
-  hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.1
-    }
-  }
 };
 
 const Index = () => {
@@ -76,64 +50,43 @@ const Index = () => {
     <div className="min-h-screen flex flex-col items-center justify-center py-10 px-4">
       <Toaster position="top-center" />
       
-      <motion.div 
-        className="w-full max-w-5xl mx-auto"
-        initial="hidden"
-        animate="visible"
-        variants={staggerContainer}
-      >
-        <motion.div 
-          className="text-center mb-12"
-          variants={fadeInUp}
-        >
+      <div className="w-full max-w-5xl mx-auto">
+        <div className="text-center mb-12">
           <h1 className="text-4xl font-bold tracking-tight">
             Email Provider Analyzer
           </h1>
           <p className="mt-4 text-xl text-muted-foreground max-w-2xl mx-auto">
             Upload a CSV file with email addresses to analyze them by provider
           </p>
-        </motion.div>
+        </div>
         
-        <motion.div 
-          className="flex flex-col gap-10"
-          variants={staggerContainer}
-        >
-          <motion.div variants={fadeInUp}>
+        <div className="flex flex-col gap-10">
+          <div>
             <FileUpload onFileUpload={handleFileUpload} isProcessing={isProcessing} />
-          </motion.div>
+          </div>
           
           {isProcessing && (
-            <motion.div 
-              className="w-full flex justify-center"
-              variants={fadeInUp}
-            >
+            <div className="w-full flex justify-center">
               <div className="flex flex-col items-center">
                 <div className="w-20 h-1 bg-primary/20 rounded-full overflow-hidden">
                   <div className="h-full w-1/2 bg-primary animated-gradient rounded-full"></div>
                 </div>
                 <p className="mt-4 text-sm text-muted-foreground">Processing your file...</p>
               </div>
-            </motion.div>
+            </div>
           )}
           
           {hasResults && !isProcessing && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-            >
+            <div className="fade-in">
               <AnalysisResults results={results} />
-            </motion.div>
+            </div>
           )}
-        </motion.div>
+        </div>
         
-        <motion.footer 
-          className="mt-24 text-center text-sm text-muted-foreground"
-          variants={fadeInUp}
-        >
+        <footer className="mt-24 text-center text-sm text-muted-foreground">
           <p>Securely analyze your email lists — data never leaves your browser</p>
-        </motion.footer>
-      </motion.div>
+        </footer>
+      </div>
     </div>
   );
 };
