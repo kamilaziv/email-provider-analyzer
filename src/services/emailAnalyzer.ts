@@ -1,4 +1,3 @@
-
 interface AnalysisResult {
   providers: {
     name: string;
@@ -88,8 +87,145 @@ const DOMAIN_PROVIDER_MAP: Record<string, string> = {
   'gmx.de': 'GMX',
 };
 
+// MX record to provider mapping
+const MX_PROVIDER_MAP: Record<string, string> = {
+  'google': 'Google',
+  'googlemail': 'Gmail',
+  'gmail': 'Gmail',
+  'outlook': 'Microsoft',
+  'hotmail': 'Microsoft',
+  'live': 'Microsoft', 
+  'msn': 'Microsoft',
+  'microsoft': 'Microsoft',
+  'office365': 'Microsoft',
+  'yahoodns': 'Yahoo',
+  'yahoomail': 'Yahoo',
+  'icloud': 'Apple',
+  'me.com': 'Apple',
+  'mail.me.com': 'Apple',
+  'protonmail': 'Proton',
+  'zoho': 'Zoho',
+  'aol': 'AOL',
+  'mail.ru': 'Mail.ru',
+  'yandex': 'Yandex',
+  'gmx': 'GMX',
+};
+
+// Cache for DNS MX lookups to avoid redundant API calls
+const MX_CACHE: Record<string, string> = {};
+
 // Email validation regex
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+// Check if running in browser environment
+const isBrowser = typeof window !== 'undefined';
+
+// API endpoint for DNS lookups (using public DNS API)
+const DNS_API_ENDPOINT = 'https://dns.google/resolve';
+
+/**
+ * Perform DNS MX lookup for a domain using a public DNS API
+ */
+const performDNSLookup = async (domain: string): Promise<string | null> => {
+  try {
+    // Check cache first
+    if (MX_CACHE[domain]) {
+      console.log(`Using cached MX record for ${domain}: ${MX_CACHE[domain]}`);
+      return MX_CACHE[domain];
+    }
+
+    console.log(`Performing DNS lookup for ${domain}...`);
+    
+    // Construct API URL for MX records
+    const apiUrl = `${DNS_API_ENDPOINT}?name=${encodeURIComponent(domain)}&type=MX`;
+    
+    const response = await fetch(apiUrl);
+    
+    if (!response.ok) {
+      console.warn(`DNS API request failed for ${domain}: ${response.statusText}`);
+      return null;
+    }
+    
+    const data = await response.json();
+    
+    // Process MX records from the response
+    if (data.Answer && data.Answer.length > 0) {
+      // Find provider from MX records
+      for (const record of data.Answer) {
+        // Extract hostname from MX record data (format: "10 mx.example.com")
+        const mxHost = record.data.split(' ')[1].toLowerCase();
+        
+        // Check each part of the MX hostname against our provider mapping
+        const mxParts = mxHost.split('.');
+        for (const part of mxParts) {
+          if (MX_PROVIDER_MAP[part]) {
+            const provider = MX_PROVIDER_MAP[part];
+            // Cache the result
+            MX_CACHE[domain] = provider;
+            console.log(`Found provider for ${domain} via MX record: ${provider}`);
+            return provider;
+          }
+        }
+      }
+    }
+    
+    // No provider found from MX records
+    console.log(`No provider identified from MX records for ${domain}`);
+    MX_CACHE[domain] = 'Other'; // Cache negative result too
+    return null;
+  } catch (error) {
+    console.error(`Error performing DNS lookup for ${domain}:`, error);
+    return null;
+  }
+};
+
+/**
+ * Determine the provider based on the email domain, with optional DNS lookup
+ */
+const getProviderFromDomain = async (domain: string, useDNS = true): Promise<string> => {
+  // First check our direct domain mapping
+  if (DOMAIN_PROVIDER_MAP[domain]) {
+    return DOMAIN_PROVIDER_MAP[domain];
+  }
+  
+  // Check for custom domains used by major providers
+  const domainLower = domain.toLowerCase();
+  
+  if (domainLower.includes('outlook') || domainLower.includes('office') || domainLower.includes('microsoft')) {
+    return 'Microsoft';
+  }
+  
+  if (domainLower.includes('google')) {
+    return 'Google';
+  }
+  
+  if (domainLower.includes('yahoo')) {
+    return 'Yahoo';
+  }
+  
+  if (domainLower.includes('zoho')) {
+    return 'Zoho';
+  }
+  
+  if (domainLower.includes('yandex')) {
+    return 'Yandex';
+  }
+  
+  if (domainLower.includes('proton') || domainLower.includes('pm.me')) {
+    return 'Proton';
+  }
+  
+  // Try DNS lookup for unknown domains if enabled
+  if (useDNS && isBrowser) {
+    const dnsProvider = await performDNSLookup(domain);
+    if (dnsProvider) {
+      return dnsProvider;
+    }
+  }
+  
+  // Return 'Other' for any unrecognized domain
+  return 'Other';
+};
 
 export const analyzeEmailsFromCSV = async (file: File): Promise<AnalysisResult> => {
   console.log(`Starting analysis of file: ${file.name} (${file.size} bytes)`);
@@ -121,9 +257,17 @@ export const analyzeEmailsFromCSV = async (file: File): Promise<AnalysisResult> 
           return;
         }
         
-        const analysis = processCSVContent(result, file.name);
-        console.log(`Analysis complete: Found ${analysis.validEmails} valid emails across ${analysis.providers.length} providers`);
-        resolve(analysis);
+        processCSVContent(result, file.name)
+          .then(analysis => {
+            console.log(`Analysis complete: Found ${analysis.validEmails} valid emails across ${analysis.providers.length} providers`);
+            resolve(analysis);
+          })
+          .catch(error => {
+            console.error('Error during CSV processing:', error);
+            reject(error instanceof Error 
+              ? error 
+              : new Error('An unexpected error occurred while processing the file.'));
+          });
       } catch (error) {
         console.error('Error during CSV processing:', error);
         reject(error instanceof Error 
@@ -141,7 +285,7 @@ export const analyzeEmailsFromCSV = async (file: File): Promise<AnalysisResult> 
   });
 };
 
-const processCSVContent = (content: string, fileName: string): AnalysisResult => {
+const processCSVContent = async (content: string, fileName: string): Promise<AnalysisResult> => {
   console.log('Processing CSV content...');
   
   // Initialize variables
@@ -181,9 +325,12 @@ const processCSVContent = (content: string, fileName: string): AnalysisResult =>
     let foundAnyEmails = false;
     
     // Process each line to find emails
-    lines.forEach((line, index) => {
+    const emailProcessingPromises = [];
+    
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index];
       // Skip empty lines
-      if (!line.trim()) return;
+      if (!line.trim()) continue;
       
       try {
         // Split by detected delimiter
@@ -191,7 +338,8 @@ const processCSVContent = (content: string, fileName: string): AnalysisResult =>
         
         // Search for emails in parts
         let foundEmailInLine = false;
-        parts.forEach(part => {
+        
+        for (const part of parts) {
           // Clean the part - remove quotes and extra spaces
           const cleanPart = part.trim().replace(/^["']|["']$/g, '');
           
@@ -200,21 +348,34 @@ const processCSVContent = (content: string, fileName: string): AnalysisResult =>
             foundAnyEmails = true;
             
             // Don't count duplicates
-            if (foundEmails.has(cleanPart)) return;
+            if (foundEmails.has(cleanPart)) continue;
             foundEmails.add(cleanPart);
             
             const domain = cleanPart.split('@')[1].toLowerCase();
-            const provider = getProviderFromDomain(domain);
             
-            // Increment provider count
-            providerCount[provider] = (providerCount[provider] || 0) + 1;
+            // Queue a promise for provider detection
+            const processingPromise = (async () => {
+              try {
+                // Use DNS lookup for provider detection
+                const provider = await getProviderFromDomain(domain, true);
+                
+                // Increment provider count
+                providerCount[provider] = (providerCount[provider] || 0) + 1;
+                
+                // Store raw data
+                if (!rawData[provider]) {
+                  rawData[provider] = [];
+                }
+                rawData[provider].push(cleanPart);
+                
+                return { valid: true };
+              } catch (err) {
+                console.error(`Error processing email ${cleanPart}:`, err);
+                return { valid: false };
+              }
+            })();
             
-            // Store raw data
-            if (!rawData[provider]) {
-              rawData[provider] = [];
-            }
-            rawData[provider].push(cleanPart);
-            
+            emailProcessingPromises.push(processingPromise);
             validEmails++;
           } else if (cleanPart.includes('@')) {
             // Potentially malformed email
@@ -225,37 +386,55 @@ const processCSVContent = (content: string, fileName: string): AnalysisResult =>
               console.log(`Invalid email format at line ${index + 1}: "${cleanPart}"`);
             }
           }
-        });
+        }
         
         // If no email found in line, try direct regex search
         if (!foundEmailInLine) {
           const emailMatches = line.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
           if (emailMatches) {
-            emailMatches.forEach(email => {
+            for (const email of emailMatches) {
               if (EMAIL_REGEX.test(email) && !foundEmails.has(email)) {
                 foundEmails.add(email);
                 foundAnyEmails = true;
                 
                 const domain = email.split('@')[1].toLowerCase();
-                const provider = getProviderFromDomain(domain);
                 
-                providerCount[provider] = (providerCount[provider] || 0) + 1;
+                // Queue a promise for provider detection
+                const processingPromise = (async () => {
+                  try {
+                    // Use DNS lookup for provider detection
+                    const provider = await getProviderFromDomain(domain, true);
+                    
+                    // Increment provider count
+                    providerCount[provider] = (providerCount[provider] || 0) + 1;
+                    
+                    // Store raw data
+                    if (!rawData[provider]) {
+                      rawData[provider] = [];
+                    }
+                    rawData[provider].push(email);
+                    
+                    return { valid: true };
+                  } catch (err) {
+                    console.error(`Error processing email ${email}:`, err);
+                    return { valid: false };
+                  }
+                })();
                 
-                if (!rawData[provider]) {
-                  rawData[provider] = [];
-                }
-                rawData[provider].push(email);
-                
+                emailProcessingPromises.push(processingPromise);
                 validEmails++;
               }
-            });
+            }
           }
         }
       } catch (lineError) {
         console.error(`Error processing line ${index + 1}:`, lineError);
         errorMessages.push(`Error in line ${index + 1}: ${lineError instanceof Error ? lineError.message : 'Unknown error'}`);
       }
-    });
+    }
+    
+    // Wait for all email processing to complete
+    await Promise.all(emailProcessingPromises);
     
     if (!foundAnyEmails) {
       console.warn('No valid emails found in the file');
@@ -297,40 +476,4 @@ const processCSVContent = (content: string, fileName: string): AnalysisResult =>
   }
   
   return result;
-};
-
-const getProviderFromDomain = (domain: string): string => {
-  // Check if domain is directly mapped
-  if (DOMAIN_PROVIDER_MAP[domain]) {
-    return DOMAIN_PROVIDER_MAP[domain];
-  }
-  
-  // Check for custom domains used by major providers
-  // microsoft365, googleworkspace, etc.
-  if (domain.includes('outlook') || domain.includes('office') || domain.includes('microsoft')) {
-    return 'Microsoft';
-  }
-  
-  if (domain.includes('google')) {
-    return 'Google';
-  }
-  
-  if (domain.includes('yahoo')) {
-    return 'Yahoo';
-  }
-  
-  if (domain.includes('zoho')) {
-    return 'Zoho';
-  }
-  
-  if (domain.includes('yandex')) {
-    return 'Yandex';
-  }
-  
-  if (domain.includes('proton') || domain.includes('pm.me')) {
-    return 'Proton';
-  }
-  
-  // Return 'Other' for any unrecognized domain
-  return 'Other';
 };
