@@ -7,7 +7,8 @@ import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
-import { Download, PieChart as PieChartIcon, List } from 'lucide-react';
+import { Download, PieChart as PieChartIcon, List, AlertTriangle } from 'lucide-react';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface EmailProvider {
   name: string;
@@ -22,6 +23,7 @@ interface AnalysisResultsProps {
     validEmails: number;
     invalidEmails: number;
     raw: Record<string, string[]>;
+    errors?: string[];
   };
 }
 
@@ -33,6 +35,9 @@ const COLORS = [
 const AnalysisResults = ({ results }: AnalysisResultsProps) => {
   const [activeTab, setActiveTab] = useState('chart');
   const [animation, setAnimation] = useState(false);
+  
+  // Ensure the errors array always exists
+  const errors = results.errors || [];
 
   // Trigger animation when component mounts
   useEffect(() => {
@@ -82,6 +87,18 @@ const AnalysisResults = ({ results }: AnalysisResultsProps) => {
           </Button>
         </div>
         
+        {errors.length > 0 && (
+          <Alert variant="warning" className="mb-4">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription>
+              {errors.length === 1 
+                ? errors[0] 
+                : `${errors.length} issues found during analysis. The first one is: ${errors[0]}`
+              }
+            </AlertDescription>
+          </Alert>
+        )}
+        
         <Separator className="my-4" />
         
         <Tabs defaultValue="chart" value={activeTab} onValueChange={setActiveTab} className="mt-6">
@@ -98,55 +115,67 @@ const AnalysisResults = ({ results }: AnalysisResultsProps) => {
           
           <TabsContent value="chart" className="pt-2">
             <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={results.providers}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    outerRadius={100}
-                    fill="#8884d8"
-                    dataKey="value"
-                    animationDuration={1500}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                  >
-                    {results.providers.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color || COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
+              {results.providers.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={results.providers}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      outerRadius={100}
+                      fill="#8884d8"
+                      dataKey="value"
+                      animationDuration={1500}
+                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                    >
+                      {results.providers.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color || COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center">
+                  <p className="text-muted-foreground">No valid email providers found to display</p>
+                </div>
+              )}
             </div>
           </TabsContent>
           
           <TabsContent value="list" className="pt-2 animate-fade-in">
-            <div className="grid gap-3">
-              {results.providers.map((provider, index) => (
-                <div 
-                  key={provider.name}
-                  className="flex items-center justify-between p-3 rounded-lg bg-secondary/50 border border-border"
-                >
-                  <div className="flex items-center gap-3">
-                    <div 
-                      className="w-4 h-4 rounded-full" 
-                      style={{ backgroundColor: provider.color || COLORS[index % COLORS.length] }}
-                    />
-                    <span className="font-medium">{provider.name}</span>
+            {results.providers.length > 0 ? (
+              <div className="grid gap-3">
+                {results.providers.map((provider, index) => (
+                  <div 
+                    key={provider.name}
+                    className="flex items-center justify-between p-3 rounded-lg bg-secondary/50 border border-border"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div 
+                        className="w-4 h-4 rounded-full" 
+                        style={{ backgroundColor: provider.color || COLORS[index % COLORS.length] }}
+                      />
+                      <span className="font-medium">{provider.name}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="px-2 py-1 bg-background rounded-md text-sm">
+                        {provider.value} emails
+                      </span>
+                      <span className="text-muted-foreground text-sm">
+                        {((provider.value / results.validEmails) * 100).toFixed(1)}%
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="px-2 py-1 bg-background rounded-md text-sm">
-                      {provider.value} emails
-                    </span>
-                    <span className="text-muted-foreground text-sm">
-                      {((provider.value / results.validEmails) * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div className="py-8 text-center">
+                <p className="text-muted-foreground">No valid email providers found to display</p>
+              </div>
+            )}
           </TabsContent>
         </Tabs>
       </Card>
