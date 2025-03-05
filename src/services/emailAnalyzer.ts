@@ -1,4 +1,3 @@
-
 interface AnalysisResult {
   providers: {
     name: string;
@@ -10,6 +9,7 @@ interface AnalysisResult {
   invalidEmails: number;
   raw: Record<string, string[]>;
   errors?: string[];
+  processingTimeMs?: number;
 }
 
 // Email provider colors
@@ -250,6 +250,9 @@ const getProviderFromDomain = async (domain: string, useDNS = true): Promise<str
 export const analyzeEmailsFromCSV = async (file: File): Promise<AnalysisResult> => {
   console.log(`Starting analysis of file: ${file.name} (${file.size} bytes)`);
   
+  // Start timing the analysis
+  const startTime = performance.now();
+  
   return new Promise((resolve, reject) => {
     // Validate file type and size first
     if (!file.name.toLowerCase().endsWith('.csv') && file.type !== 'text/csv') {
@@ -279,7 +282,14 @@ export const analyzeEmailsFromCSV = async (file: File): Promise<AnalysisResult> 
         
         processCSVContent(result, file.name)
           .then(analysis => {
-            console.log(`Analysis complete: Found ${analysis.validEmails} valid emails across ${analysis.providers.length} providers`);
+            // Calculate processing time
+            const endTime = performance.now();
+            const processingTimeMs = Math.round(endTime - startTime);
+            
+            // Add processing time to results
+            analysis.processingTimeMs = processingTimeMs;
+            
+            console.log(`Analysis complete in ${processingTimeMs}ms: Found ${analysis.validEmails} valid emails across ${analysis.providers.length} providers`);
             resolve(analysis);
           })
           .catch(error => {
@@ -521,7 +531,8 @@ const processCSVContent = async (content: string, fileName: string): Promise<Ana
     totalEmails: validEmails + invalidEmails,
     validEmails,
     invalidEmails,
-    raw: rawData
+    raw: rawData,
+    processingTimeMs: undefined
   };
   
   // Only add errors if there are any
@@ -531,4 +542,3 @@ const processCSVContent = async (content: string, fileName: string): Promise<Ana
   
   return result;
 };
-

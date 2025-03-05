@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { 
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend 
@@ -7,7 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Separator } from '@/components/ui/separator';
 import { Button } from '@/components/ui/button';
-import { Download, PieChart as PieChartIcon, List, AlertTriangle } from 'lucide-react';
+import { Download, PieChart as PieChartIcon, List, AlertTriangle, Clock } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface EmailProvider {
@@ -24,6 +23,7 @@ interface AnalysisResultsProps {
     invalidEmails: number;
     raw: Record<string, string[]>;
     errors?: string[];
+    processingTimeMs?: number;
   };
 }
 
@@ -36,16 +36,13 @@ const AnalysisResults = ({ results }: AnalysisResultsProps) => {
   const [activeTab, setActiveTab] = useState('chart');
   const [animation, setAnimation] = useState(false);
   
-  // Ensure the errors array always exists
   const errors = results.errors || [];
 
-  // Trigger animation when component mounts
   useEffect(() => {
     setAnimation(true);
   }, []);
 
   const handleDownloadCSV = () => {
-    // Create CSV content
     let csvContent = "Provider,Email\n";
     
     Object.entries(results.raw).forEach(([provider, emails]) => {
@@ -54,7 +51,6 @@ const AnalysisResults = ({ results }: AnalysisResultsProps) => {
       });
     });
     
-    // Create and trigger download
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -74,6 +70,11 @@ const AnalysisResults = ({ results }: AnalysisResultsProps) => {
             <h2 className="text-2xl font-semibold mt-2">Email Provider Analysis</h2>
             <p className="text-muted-foreground">
               Analyzed {results.totalEmails} emails • {results.validEmails} valid • {results.invalidEmails} invalid
+              {results.processingTimeMs && (
+                <span className="ml-1">
+                  • <Clock className="inline h-3 w-3 mb-1" /> {(results.processingTimeMs / 1000).toFixed(2)}s
+                </span>
+              )}
             </p>
           </div>
           <Button 
