@@ -12,7 +12,7 @@ const initialResults = {
   validEmails: 0,
   invalidEmails: 0,
   raw: {},
-  errors: []
+  errors: [] // Making sure errors is initialized as an empty array
 };
 
 const Index = () => {
@@ -26,21 +26,27 @@ const Index = () => {
     try {
       const analysisResults = await analyzeEmailsFromCSV(file);
       
+      // Ensure the results object always has an errors array even if the service doesn't provide one
+      const completeResults = {
+        ...analysisResults,
+        errors: analysisResults.errors || []
+      };
+      
       // Short delay for animation effect
       setTimeout(() => {
-        setResults(analysisResults);
+        setResults(completeResults);
         setHasResults(true);
         setIsProcessing(false);
         
-        if (analysisResults.errors && analysisResults.errors.length > 0) {
+        if (completeResults.errors && completeResults.errors.length > 0) {
           // Show warning toast if there were errors but we still got some results
           toast.warning('Analysis completed with warnings', {
-            description: analysisResults.errors[0],
+            description: completeResults.errors[0],
             duration: 5000
           });
-        } else if (analysisResults.validEmails > 0) {
+        } else if (completeResults.validEmails > 0) {
           toast.success('Analysis complete', {
-            description: `Analyzed ${analysisResults.totalEmails} emails from ${file.name}`
+            description: `Analyzed ${completeResults.totalEmails} emails from ${file.name}`
           });
         } else {
           toast.error('No valid emails found', {
