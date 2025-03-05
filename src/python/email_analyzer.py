@@ -170,11 +170,11 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
     total_emails = valid_emails + invalid_emails
     
     try:
-        # First, write the analysis summary
+        # First, create a new file with the analysis summary and then the original data
         with open(output_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             
-            # Write summary
+            # Write summary section
             writer.writerow(['EMAIL PROVIDER ANALYSIS SUMMARY'])
             writer.writerow(['Total emails', total_emails])
             writer.writerow(['Valid emails', valid_emails])
@@ -194,60 +194,78 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
                 writer.writerow([provider, count, f"{percentage:.2f}%"])
             
             writer.writerow([])
-            
-            # Write original format data with provider information
             writer.writerow(['ANALYZED EMAILS (ORIGINAL FORMAT)'])
             
-            # Write headers if they exist
+            # Create output file preserving the original format exactly
+            # First check if we have headers
             if headers:
-                # Add Provider column if it doesn't exist
-                if not any(h.lower() == 'email provider' for h in headers):
-                    output_headers = headers + ['Email Provider']
-                else:
-                    output_headers = headers
-                writer.writerow(output_headers)
-            
-            # Find email column index if headers exist
-            email_col_index = -1
-            provider_col_index = -1
-            if headers:
+                # Check if we need to add Email Provider column
+                provider_col_index = -1
+                email_col_index = -1
+                
                 for i, header in enumerate(headers):
-                    if header.lower() == 'email':
-                        email_col_index = i
-                    if header.lower() == 'email provider':
+                    header_lower = header.lower()
+                    if 'email provider' in header_lower or 'provider' == header_lower:
                         provider_col_index = i
-            
-            # Write rows
-            for row in original_rows:
-                if email_col_index >= 0 and email_col_index < len(row):
-                    # Get email from the row
-                    email = row[email_col_index].strip()
+                    if header_lower == 'email':
+                        email_col_index = i
+                
+                # Write headers, adding Email Provider if needed
+                output_headers = list(headers)  # Make a copy to avoid modifying the original
+                if provider_col_index == -1:
+                    output_headers.append('Email Provider')
+                
+                writer.writerow(output_headers)
+                
+                # Process rows
+                for row in original_rows:
+                    output_row = list(row)  # Make a copy
                     
-                    # Determine provider
+                    # Find email and determine provider
+                    email = None
                     provider = None
-                    if is_valid_email(email):
-                        domain = email.split('@')[1].lower()
-                        provider = get_provider_from_domain(domain)
                     
-                    # Update row with provider info
-                    output_row = row.copy()
-                    if provider_col_index >= 0 and provider_col_index < len(row):
-                        # Update existing provider column
+                    if email_col_index >= 0 and email_col_index < len(row):
+                        email = row[email_col_index].strip()
+                        if is_valid_email(email):
+                            domain = email.split('@')[1].lower()
+                            provider = get_provider_from_domain(domain)
+                    
+                    # Add or update provider info
+                    if provider_col_index >= 0 and provider_col_index < len(output_row):
                         if provider:
                             output_row[provider_col_index] = provider
                     else:
-                        # Add provider column if it doesn't exist in the row
                         if provider:
                             output_row.append(provider)
                         else:
                             output_row.append('')
                     
                     writer.writerow(output_row)
-                else:
-                    # If no email column, just write the original row
-                    writer.writerow(row)
-            
-            writer.writerow([])
+            else:
+                # If no headers, just write the original rows as is, with provider info as an additional column
+                for row in original_rows:
+                    output_row = list(row)  # Make a copy
+                    
+                    # Try to find an email in the row
+                    email = None
+                    provider = None
+                    
+                    for field in row:
+                        field_str = str(field).strip()
+                        if is_valid_email(field_str):
+                            email = field_str
+                            domain = email.split('@')[1].lower()
+                            provider = get_provider_from_domain(domain)
+                            break
+                    
+                    # Add provider info
+                    if provider:
+                        output_row.append(provider)
+                    else:
+                        output_row.append('')
+                    
+                    writer.writerow(output_row)
         
         print(f"\nResults exported to {output_file}")
     
@@ -256,36 +274,7 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
 
 def main():
     """Main function to parse arguments and run the analysis."""
-    parser = argparse.ArgumentParser(description='Analyze email addresses from a CSV file by provider.')
-    parser.add_argument('file', help='Path to the CSV file containing email addresses')
-    parser.add_argument('-d', '--delimiter', default=',', help='CSV delimiter character (default: ,)')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Enable verbose output (list all emails)')
-    parser.add_argument('-o', '--output', help='Export results to a CSV file (defaults to input_file_analysis.csv)')
-    
-    args = parser.parse_args()
-    
-    # Validate that the input file exists and is a CSV
-    if not os.path.isfile(args.file):
-        print(f"Error: File '{args.file}' not found.")
-        sys.exit(1)
-    
-    if not args.file.lower().endswith('.csv'):
-        print(f"Warning: File '{args.file}' does not have a .csv extension. Proceeding anyway...")
-    
-    # Run the analysis
-    provider_counter, valid_emails, invalid_emails, emails_by_provider, original_rows, headers = analyze_csv(
-        args.file, delimiter=args.delimiter
-    )
-    
-    # Print the results
-    print_results(provider_counter, valid_emails, invalid_emails, emails_by_provider, verbose=args.verbose)
-    
-    # Determine output path if not provided
-    output_file = args.output if args.output else get_default_output_path(args.file)
-    
-    # Export the results
-    export_results(provider_counter, valid_emails, invalid_emails, emails_by_provider, original_rows, headers, output_file)
-    print(f"\nResults automatically saved to: {output_file}")
+    # ... keep existing code (main function)
 
 if __name__ == '__main__':
     main()
