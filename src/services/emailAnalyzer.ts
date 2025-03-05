@@ -1,3 +1,4 @@
+
 interface AnalysisResult {
   providers: {
     name: string;
@@ -139,7 +140,13 @@ const performDNSLookup = async (domain: string): Promise<string | null> => {
     // Construct API URL for MX records
     const apiUrl = `${DNS_API_ENDPOINT}?name=${encodeURIComponent(domain)}&type=MX`;
     
-    const response = await fetch(apiUrl);
+    const response = await fetch(apiUrl, {
+      // Adding cache control to avoid browser caching issues
+      cache: 'no-store',
+      headers: {
+        'Accept': 'application/dns-json'
+      }
+    });
     
     if (!response.ok) {
       console.warn(`DNS API request failed for ${domain}: ${response.statusText}`);
@@ -167,15 +174,22 @@ const performDNSLookup = async (domain: string): Promise<string | null> => {
           }
         }
       }
+      
+      // If we found MX records but couldn't identify a provider, cache as 'Other'
+      console.log(`Found MX records for ${domain} but couldn't identify provider, marking as 'Other'`);
+      MX_CACHE[domain] = 'Other';
+      return 'Other';
     }
     
-    // No provider found from MX records
-    console.log(`No provider identified from MX records for ${domain}`);
+    // No MX records found
+    console.log(`No MX records found for ${domain}, marking as 'Other'`);
     MX_CACHE[domain] = 'Other'; // Cache negative result too
-    return null;
+    return 'Other';
   } catch (error) {
     console.error(`Error performing DNS lookup for ${domain}:`, error);
-    return null;
+    // In case of errors, still cache to avoid repeated failures
+    MX_CACHE[domain] = 'Other';
+    return 'Other';
   }
 };
 
@@ -215,11 +229,17 @@ const getProviderFromDomain = async (domain: string, useDNS = true): Promise<str
     return 'Proton';
   }
   
-  // Try DNS lookup for unknown domains if enabled
+  // Try DNS lookup for unknown domains if enabled and in browser environment
   if (useDNS && isBrowser) {
-    const dnsProvider = await performDNSLookup(domain);
-    if (dnsProvider) {
-      return dnsProvider;
+    try {
+      console.log(`Domain ${domain} not in known mappings, performing DNS lookup...`);
+      const dnsProvider = await performDNSLookup(domain);
+      if (dnsProvider) {
+        return dnsProvider;
+      }
+    } catch (dnsError) {
+      console.error(`DNS lookup failed for ${domain}:`, dnsError);
+      // Continue to return 'Other' if DNS lookup fails
     }
   }
   
@@ -324,6 +344,40 @@ const processCSVContent = async (content: string, fileName: string): Promise<Ana
     const foundEmails = new Set<string>();
     let foundAnyEmails = false;
     
+    // Set a limit on parallel DNS requests to avoid rate limiting
+    const MAX_CONCURRENT_DNS = 10;
+    const dnsQueue: {domain: string, resolve: (provider: string) => void}[] = [];
+    let activeDnsRequests = 0;
+    
+    // Function to process DNS queue
+    const processDnsQueue = async () => {
+      if (dnsQueue.length === 0 || activeDnsRequests >= MAX_CONCURRENT_DNS) return;
+      
+      const request = dnsQueue.shift();
+      if (!request) return;
+      
+      activeDnsRequests++;
+      try {
+        const provider = await getProviderFromDomain(request.domain, true);
+        request.resolve(provider);
+      } catch (error) {
+        console.error(`Error in DNS queue processing:`, error);
+        request.resolve('Other'); // Default to 'Other' on errors
+      } finally {
+        activeDnsRequests--;
+        // Process next in queue
+        processDnsQueue();
+      }
+    };
+    
+    // Queue a DNS lookup and return a promise
+    const queueDnsLookup = (domain: string): Promise<string> => {
+      return new Promise(resolve => {
+        dnsQueue.push({domain, resolve});
+        processDnsQueue();
+      });
+    };
+    
     // Process each line to find emails
     const emailProcessingPromises = [];
     
@@ -356,8 +410,8 @@ const processCSVContent = async (content: string, fileName: string): Promise<Ana
             // Queue a promise for provider detection
             const processingPromise = (async () => {
               try {
-                // Use DNS lookup for provider detection
-                const provider = await getProviderFromDomain(domain, true);
+                // Use DNS lookup for provider detection via queue
+                const provider = await queueDnsLookup(domain);
                 
                 // Increment provider count
                 providerCount[provider] = (providerCount[provider] || 0) + 1;
@@ -402,8 +456,8 @@ const processCSVContent = async (content: string, fileName: string): Promise<Ana
                 // Queue a promise for provider detection
                 const processingPromise = (async () => {
                   try {
-                    // Use DNS lookup for provider detection
-                    const provider = await getProviderFromDomain(domain, true);
+                    // Use DNS lookup for provider detection via queue
+                    const provider = await queueDnsLookup(domain);
                     
                     // Increment provider count
                     providerCount[provider] = (providerCount[provider] || 0) + 1;
@@ -477,3 +531,4 @@ const processCSVContent = async (content: string, fileName: string): Promise<Ana
   
   return result;
 };
+
