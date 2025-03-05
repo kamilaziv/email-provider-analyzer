@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { 
   PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend 
@@ -24,6 +25,12 @@ interface AnalysisResultsProps {
     raw: Record<string, string[]>;
     errors?: string[];
     processingTimeMs?: number;
+    csvData?: {
+      headers: string[];
+      rows: Record<string, string>[];
+      emailColumnIndex: number;
+      providerColumnIndex: number;
+    };
   };
 }
 
@@ -43,22 +50,54 @@ const AnalysisResults = ({ results }: AnalysisResultsProps) => {
   }, []);
 
   const handleDownloadCSV = () => {
-    let csvContent = "Provider,Email\n";
-    
-    Object.entries(results.raw).forEach(([provider, emails]) => {
-      emails.forEach(email => {
-        csvContent += `${provider},"${email}"\n`;
+    // Check if we have structured CSV data
+    if (results.csvData) {
+      const { headers, rows } = results.csvData;
+      
+      // Create CSV content with original headers
+      let csvContent = headers.join(',') + '\n';
+      
+      // Add each row
+      rows.forEach(row => {
+        const rowValues = headers.map(header => {
+          // Properly escape any commas or quotes in the cell value
+          const value = row[header] || '';
+          const escapedValue = value.includes(',') || value.includes('"') 
+            ? `"${value.replace(/"/g, '""')}"` 
+            : value;
+          return escapedValue;
+        });
+        csvContent += rowValues.join(',') + '\n';
       });
-    });
-    
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'email_analysis.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+      
+      // Trigger download
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', 'email_analysis_with_providers.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      // Fallback to simple format if structured data not available
+      let csvContent = "Provider,Email\n";
+      
+      Object.entries(results.raw).forEach(([provider, emails]) => {
+        emails.forEach(email => {
+          csvContent += `${provider},"${email}"\n`;
+        });
+      });
+      
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.setAttribute('href', url);
+      link.setAttribute('download', 'email_analysis.csv');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   return (

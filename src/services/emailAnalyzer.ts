@@ -10,6 +10,12 @@ interface AnalysisResult {
   raw: Record<string, string[]>;
   errors?: string[];
   processingTimeMs?: number;
+  csvData?: {
+    headers: string[];
+    rows: Record<string, string>[];
+    emailColumnIndex: number;
+    providerColumnIndex: number;
+  };
 }
 
 // Email provider colors
@@ -350,7 +356,24 @@ const processCSVContent = async (content: string, fileName: string): Promise<Ana
     const primaryDelimiter = delimiterCount.sort((a, b) => b.count - a.count)[0].delimiter;
     console.log(`Detected primary delimiter: "${primaryDelimiter}"`);
     
-    // Try multiple approaches to find emails
+    // Process headers
+    const headers = lines[0].split(primaryDelimiter).map(header => header.trim().replace(/^["']|["']$/g, ''));
+    console.log(`Detected headers: ${headers.join(', ')}`);
+    
+    // Find email and provider column indices
+    const emailColumnIndex = headers.findIndex(header => 
+      header.toLowerCase().includes('email') && !header.toLowerCase().includes('domain') && !header.toLowerCase().includes('provider'));
+    const providerColumnIndex = headers.findIndex(header => 
+      header.toLowerCase().includes('provider') || header.toLowerCase().includes('email provider'));
+    
+    console.log(`Email column index: ${emailColumnIndex}, Provider column index: ${providerColumnIndex}`);
+    
+    if (emailColumnIndex === -1) {
+      errorMessages.push('Could not identify an email column in the CSV file.');
+    }
+    
+    // Parse each row as an object
+    const rows: Record<string, string>[] = [];
     const foundEmails = new Set<string>();
     let foundAnyEmails = false;
     
@@ -388,112 +411,89 @@ const processCSVContent = async (content: string, fileName: string): Promise<Ana
       });
     };
     
-    // Process each line to find emails
+    // Process data rows (skip header)
     const emailProcessingPromises = [];
     
-    for (let index = 0; index < lines.length; index++) {
-      const line = lines[index];
-      // Skip empty lines
-      if (!line.trim()) continue;
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
       
       try {
-        // Split by detected delimiter
-        const parts = line.split(primaryDelimiter);
+        const values = line.split(primaryDelimiter);
+        const rowData: Record<string, string> = {};
         
-        // Search for emails in parts
-        let foundEmailInLine = false;
+        // Create an object with header keys and row values
+        headers.forEach((header, index) => {
+          const value = index < values.length ? values[index].trim().replace(/^["']|["']$/g, '') : '';
+          rowData[header] = value;
+        });
         
-        for (const part of parts) {
-          // Clean the part - remove quotes and extra spaces
-          const cleanPart = part.trim().replace(/^["']|["']$/g, '');
+        // Extract email value
+        let email = emailColumnIndex !== -1 && emailColumnIndex < values.length 
+          ? values[emailColumnIndex].trim().replace(/^["']|["']$/g, '') 
+          : '';
           
-          if (EMAIL_REGEX.test(cleanPart)) {
-            foundEmailInLine = true;
-            foundAnyEmails = true;
+        // If no email found in designated column, scan all fields for an email
+        if (!email || !EMAIL_REGEX.test(email)) {
+          for (const value of values) {
+            const cleanValue = value.trim().replace(/^["']|["']$/g, '');
+            if (EMAIL_REGEX.test(cleanValue)) {
+              email = cleanValue;
+              break;
+            }
+          }
+        }
+        
+        if (email && EMAIL_REGEX.test(email)) {
+          foundAnyEmails = true;
+          
+          // Don't process duplicates
+          if (!foundEmails.has(email)) {
+            foundEmails.add(email);
             
-            // Don't count duplicates
-            if (foundEmails.has(cleanPart)) continue;
-            foundEmails.add(cleanPart);
+            const domain = email.split('@')[1].toLowerCase();
             
-            const domain = cleanPart.split('@')[1].toLowerCase();
-            
-            // Queue a promise for provider detection
+            // Queue provider lookup
             const processingPromise = (async () => {
               try {
                 // Use DNS lookup for provider detection via queue
                 const provider = await queueDnsLookup(domain);
                 
-                // Increment provider count
+                // Store the provider in the row data if provider column exists
+                if (providerColumnIndex !== -1) {
+                  rowData[headers[providerColumnIndex]] = provider;
+                }
+                
+                // Increment provider count for charts
                 providerCount[provider] = (providerCount[provider] || 0) + 1;
                 
                 // Store raw data
                 if (!rawData[provider]) {
                   rawData[provider] = [];
                 }
-                rawData[provider].push(cleanPart);
+                rawData[provider].push(email);
                 
                 return { valid: true };
               } catch (err) {
-                console.error(`Error processing email ${cleanPart}:`, err);
+                console.error(`Error processing email ${email}:`, err);
                 return { valid: false };
               }
             })();
             
             emailProcessingPromises.push(processingPromise);
             validEmails++;
-          } else if (cleanPart.includes('@')) {
-            // Potentially malformed email
-            invalidEmails++;
-            
-            // Log the first few invalid emails for debugging
-            if (invalidEmails <= 5) {
-              console.log(`Invalid email format at line ${index + 1}: "${cleanPart}"`);
-            }
           }
-        }
-        
-        // If no email found in line, try direct regex search
-        if (!foundEmailInLine) {
-          const emailMatches = line.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
-          if (emailMatches) {
-            for (const email of emailMatches) {
-              if (EMAIL_REGEX.test(email) && !foundEmails.has(email)) {
-                foundEmails.add(email);
-                foundAnyEmails = true;
-                
-                const domain = email.split('@')[1].toLowerCase();
-                
-                // Queue a promise for provider detection
-                const processingPromise = (async () => {
-                  try {
-                    // Use DNS lookup for provider detection via queue
-                    const provider = await queueDnsLookup(domain);
-                    
-                    // Increment provider count
-                    providerCount[provider] = (providerCount[provider] || 0) + 1;
-                    
-                    // Store raw data
-                    if (!rawData[provider]) {
-                      rawData[provider] = [];
-                    }
-                    rawData[provider].push(email);
-                    
-                    return { valid: true };
-                  } catch (err) {
-                    console.error(`Error processing email ${email}:`, err);
-                    return { valid: false };
-                  }
-                })();
-                
-                emailProcessingPromises.push(processingPromise);
-                validEmails++;
-              }
-            }
-          }
+          
+          // Add this row to our rows array, even if it's a duplicate email
+          rows.push(rowData);
+        } else {
+          // Still add the row even if no valid email, but count as invalid
+          rows.push(rowData);
+          invalidEmails++;
         }
       } catch (lineError) {
-        console.error(`Error processing line ${index + 1}:`, lineError);
-        errorMessages.push(`Error in line ${index + 1}: ${lineError instanceof Error ? lineError.message : 'Unknown error'}`);
+        console.error(`Error processing line ${i + 1}:`, lineError);
+        errorMessages.push(`Error in line ${i + 1}: ${lineError instanceof Error ? lineError.message : 'Unknown error'}`);
       }
     }
     
@@ -510,35 +510,56 @@ const processCSVContent = async (content: string, fileName: string): Promise<Ana
       errorMessages.push('No valid email addresses found in the file. Please check the file format and try again.');
     }
     
+    // Create provider data for chart
+    const providers = Object.entries(providerCount)
+      .map(([name, value]) => ({
+        name,
+        value,
+        color: PROVIDER_COLORS[name] || PROVIDER_COLORS['Other']
+      }))
+      .sort((a, b) => b.value - a.value);
+    
+    const result: AnalysisResult = {
+      providers,
+      totalEmails: validEmails + invalidEmails,
+      validEmails,
+      invalidEmails,
+      raw: rawData,
+      processingTimeMs: undefined,
+      csvData: {
+        headers,
+        rows,
+        emailColumnIndex: emailColumnIndex !== -1 ? emailColumnIndex : -1,
+        providerColumnIndex: providerColumnIndex !== -1 ? providerColumnIndex : -1
+      }
+    };
+    
+    // Only add errors if there are any
+    if (errorMessages.length > 0) {
+      result.errors = errorMessages;
+    }
+    
+    return result;
   } catch (error) {
     console.error('CSV parsing error:', error);
     errorMessages.push(`Error parsing CSV: ${error instanceof Error ? error.message : 'Unknown error'}`);
     
-    // Still return whatever we were able to parse
+    // Return whatever we were able to parse
+    const result: AnalysisResult = {
+      providers: Object.entries(providerCount)
+        .map(([name, value]) => ({
+          name,
+          value,
+          color: PROVIDER_COLORS[name] || PROVIDER_COLORS['Other']
+        }))
+        .sort((a, b) => b.value - a.value),
+      totalEmails: validEmails + invalidEmails,
+      validEmails,
+      invalidEmails,
+      raw: rawData,
+      errors: errorMessages
+    };
+    
+    return result;
   }
-  
-  // Create provider data for chart
-  const providers = Object.entries(providerCount)
-    .map(([name, value]) => ({
-      name,
-      value,
-      color: PROVIDER_COLORS[name] || PROVIDER_COLORS['Other']
-    }))
-    .sort((a, b) => b.value - a.value);
-  
-  const result: AnalysisResult = {
-    providers,
-    totalEmails: validEmails + invalidEmails,
-    validEmails,
-    invalidEmails,
-    raw: rawData,
-    processingTimeMs: undefined
-  };
-  
-  // Only add errors if there are any
-  if (errorMessages.length > 0) {
-    result.errors = errorMessages;
-  }
-  
-  return result;
 };
