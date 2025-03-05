@@ -170,8 +170,9 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
     total_emails = valid_emails + invalid_emails
     
     try:
-        # First, create a new file with the analysis summary and then the original data
-        with open(output_file, 'w', newline='', encoding='utf-8') as f:
+        # Create a separate summary file
+        summary_file = output_file.replace('.csv', '_summary.csv')
+        with open(summary_file, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             
             # Write summary section
@@ -192,17 +193,17 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
             for provider, count in sorted_providers:
                 percentage = (count / valid_emails) * 100 if valid_emails > 0 else 0
                 writer.writerow([provider, count, f"{percentage:.2f}%"])
+        
+        # Now create the main output file with the original format
+        with open(output_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
             
-            writer.writerow([])
-            writer.writerow(['ANALYZED EMAILS (ORIGINAL FORMAT)'])
+            # First determine if we need to add a provider column
+            provider_col_index = -1
+            email_col_index = -1
             
-            # Create output file preserving the original format exactly
-            # First check if we have headers
             if headers:
                 # Check if we need to add Email Provider column
-                provider_col_index = -1
-                email_col_index = -1
-                
                 for i, header in enumerate(headers):
                     header_lower = header.lower()
                     if 'email provider' in header_lower or 'provider' == header_lower:
@@ -268,6 +269,7 @@ def export_results(provider_counter, valid_emails, invalid_emails, emails_by_pro
                     writer.writerow(output_row)
         
         print(f"\nResults exported to {output_file}")
+        print(f"Analysis summary exported to {summary_file}")
     
     except Exception as e:
         print(f"Error exporting results: {e}")
