@@ -1,4 +1,3 @@
-
 import React, { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { UploadCloud } from 'lucide-react';
@@ -49,7 +48,6 @@ const FileUpload = ({ onFileUpload, isProcessing }: FileUploadProps) => {
   };
 
   const validateAndProcessFile = (file: File) => {
-    // Check if file is CSV
     if (file.type !== 'text/csv' && !file.name.endsWith('.csv')) {
       toast({
         title: "Invalid file format",
@@ -59,11 +57,10 @@ const FileUpload = ({ onFileUpload, isProcessing }: FileUploadProps) => {
       return;
     }
 
-    // Check file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
+    if (file.size > 10 * 1024 * 1024) {
       toast({
         title: "File too large",
-        description: "File size should be less than 5MB.",
+        description: "File size should be less than 10MB.",
         variant: "destructive"
       });
       return;
@@ -112,7 +109,7 @@ const FileUpload = ({ onFileUpload, isProcessing }: FileUploadProps) => {
         </Button>
         
         <p className="text-xs text-muted-foreground mt-4">
-          Max file size: 5MB
+          Max file size: 10MB
         </p>
       </div>
     </div>
